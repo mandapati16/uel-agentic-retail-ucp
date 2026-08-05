@@ -48,7 +48,13 @@ ALLOWED_TABLES = {
 MAX_AUTO_REFUND = float(os.environ.get("MAX_AUTO_REFUND", "50.0"))
 CONFIDENCE_GATE = float(os.environ.get("CONFIDENCE_GATE", "0.7"))
 MONEY_ACTION_TYPES = {"price_change", "return_refund", "purchase_order"}
-
+# Fault-based return reasons bypass auto-approval regardless of refund value —
+# these represent Xiatech/product-side liability, so worth a human look even
+# when small. Non-fault reasons (e.g. "Changed Mind") follow the normal
+# refund-value threshold only. This is the single source of truth for this
+# distinction — do not duplicate this list on the agent side; call
+# propose_action and read its returned requires_human instead.
+FAULT_BASED_RETURN_REASONS = {"Damaged in Transit", "Defective", "Not as Described"}
 
 
 # Auth: pull SA key from Secret Manager, never from a local file
@@ -105,6 +111,11 @@ class Sku(BaseModel):
     cogs: float | None = None
     elasticity_true: float | None = None
     base_weekly_demand: int | None = None
+
+class ProposeActionResult(BaseModel):
+    action_id: str
+    status: str            # PENDING | APPROVED
+    requires_human: bool
 
 
 
@@ -309,7 +320,10 @@ def _requires_human(action: AgentAction) -> bool:
     if action.action_type in MONEY_ACTION_TYPES:
         if action.action_type == "return_refund":
             refund = action.payload.get("refund_amount", 0)
+            reason = action.payload.get("return_reason")
             if refund > MAX_AUTO_REFUND:
+                return True
+            if reason in FAULT_BASED_RETURN_REASONS:
                 return True
         else:
             return True
@@ -319,7 +333,7 @@ def _requires_human(action: AgentAction) -> bool:
 
 
 @mcp.tool()
-def propose_action(action: AgentAction) -> str:
+def propose_action(action: AgentAction) -> ProposeActionResult:
     """Inserts into agent_actions with status=PENDING, or auto-APPROVED
     if the action doesn't require a human gate. Never mutates a business
     record directly — that only happens in commit_action."""
@@ -352,7 +366,11 @@ def propose_action(action: AgentAction) -> str:
     if errors:
         raise RuntimeError(f"Failed to insert agent_action: {errors}")
 
-    return action_id
+    return ProposeActionResult(
+        action_id=action_id,
+        status=status,
+        requires_human=requires_human,
+    )
 
 
 @mcp.tool()
