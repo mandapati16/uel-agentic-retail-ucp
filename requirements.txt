@@ -1,0 +1,9 @@
+
+pydantic==2.5.0
+fastmcp==0.0.6
+httpx==0.25.0
+python-dotenv==1.0.0
+google-cloud-bigquery>=3.14.0
+google-cloud-aiplatform>=1.49.0
+pydantic>=2.5.0
+mcp>=1.0.0
